@@ -66,6 +66,10 @@ python3 -m flask --app wsgi:app run --port 8000
 - 被拒修订不占号，同号可换内容重新评估；
 - 并发上传在单条 `BEGIN IMMEDIATE` 事务内串行裁决，依据各自**提交时刻的最新
   修订**判断；SQLite 启用 WAL 与 `busy_timeout`，配合 Gunicorn 多 worker。
+- **裁决归属固定到每次提交**：每次上传在 `submissions` 表留一条仅追加的不可变
+  记录，完成页以该提交 ID（`?submission=`）为永久身份。无论之后是否有同修订号的
+  其他上传，刷新该链接始终显示**本次提交**的状态与原因，不会串换为别人的冲突
+  理由或后到的发布结果；页面另区同时展示**查询时**的当前已发布完整时间线。
 - 下载只返回**完整已发布版本**（当前版或历史已发布修订号），未发布修订返回 404。
 
 ## 页面与接口
@@ -73,8 +77,9 @@ python3 -m flask --app wsgi:app run --port 8000
 | 方法/路径 | 说明 |
 | --- | --- |
 | `GET /` | 上传表单 + 行程列表 |
-| `POST /upload` | 上传 CSV 并裁决（表单字段 `itinerary_no`、`revision_no`、`schedule_csv`） |
-| `GET /itinerary/<行程号>` | 当前发布时间线、最近裁决原因、修订历史 |
+| `POST /upload` | 上传 CSV 并裁决（表单字段 `itinerary_no`、`revision_no`、`schedule_csv`），成功后 302 到该次提交的完成页 |
+| `GET /itinerary/<行程号>` | 当前发布时间线、修订历史（无提交卡片） |
+| `GET /itinerary/<行程号>?submission=<提交ID>` | 该次提交的固定裁决结果 + 查询时的当前已发布时间线 |
 | `GET /download/<行程号>` | 下载当前已发布版 CSV |
 | `GET /download/<行程号>?revision=N` | 下载指定的历史已发布修订 |
 | `GET /samples/<文件名>` | 下载示例 CSV |
@@ -101,6 +106,6 @@ Dockerfile / docker-compose.yml / requirements.txt
 python3 -m pytest tests/
 ```
 
-39 个测试覆盖：DST 三种端点状态、边界转机间隔、飞行分钟/机场相接校验、
-零/一/多解释、修订幂等/冲突/过期/替换、下载仅限已发布版本，以及多线程并发
-提交的串行一致性。
+48 个测试覆盖：DST 三种端点状态、边界转机间隔、飞行分钟/机场相接校验、
+零/一/多解释、修订幂等/冲突/过期/替换、下载仅限已发布版本、每次提交完成页的
+裁决归属（刷新与后续同号上传均不串换），以及多线程并发提交的串行一致性。

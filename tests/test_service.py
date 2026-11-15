@@ -123,6 +123,82 @@ def test_rejected_revision_does_not_block_later_retry(db_path):
     assert res["outcome"] == service.PUBLISHED
 
 
+# ---- 裁决归属：每次提交按 submission_id 固定，互不串换 -------------------
+
+def test_each_submission_has_stable_identity(db_path):
+    res = service.submit("IT-S0", 1, VALID, db_path)
+    assert isinstance(res.get("submission_id"), int)
+    detail = service.get_detail("IT-S0", submission_id=res["submission_id"], db_path=db_path)
+    assert detail["submission"]["id"] == res["submission_id"]
+    assert detail["submission"]["result"]["outcome"] == service.PUBLISHED
+
+
+def test_conflict_after_publish_keeps_first_completion_page(db_path):
+    # 同行程同修订号：先发布、后冲突拒绝。两次提交各持自己的裁决，互不覆盖。
+    first = service.submit("IT-S1", 1, VALID, db_path)
+    second = service.submit("IT-S1", 1, LEGS3, db_path)
+    assert first["outcome"] == service.PUBLISHED
+    assert second["outcome"] == service.CONFLICT
+    assert first["submission_id"] != second["submission_id"]
+
+    # 先发布者的完成页（刷新等价）始终是「已发布」，看不到后到的冲突理由
+    first_view = service.get_detail("IT-S1", submission_id=first["submission_id"], db_path=db_path)
+    assert first_view["submission"]["result"]["outcome"] == service.PUBLISHED
+    assert first_view["submission"]["id"] == first["submission_id"]
+    # 后到冲突者的完成页固定为冲突拒绝
+    second_view = service.get_detail("IT-S1", submission_id=second["submission_id"], db_path=db_path)
+    assert second_view["submission"]["result"]["outcome"] == service.CONFLICT
+    assert "冲突拒绝" in second_view["submission"]["result"]["message"]
+    # 发布版不被冲突改变
+    assert first_view["current_revision"] == 1
+    assert len(first_view["timeline"]) == 2
+
+
+def test_retry_after_rejection_keeps_first_rejection_page(db_path):
+    # 先拒绝、后同号修正发布：第一次的完成页必须仍是当初的拒绝原因
+    first = service.submit("IT-S2", 1, MULTI, db_path)
+    second = service.submit("IT-S2", 1, VALID, db_path)
+    assert first["outcome"] == service.REJECTED
+    assert second["outcome"] == service.PUBLISHED
+
+    first_view = service.get_detail("IT-S2", submission_id=first["submission_id"], db_path=db_path)
+    first_result = first_view["submission"]["result"]
+    assert first_result["outcome"] == service.REJECTED
+    assert first_result["detail"]["kind"] == "ambiguous"
+    # 第二次的完成页是发布
+    second_view = service.get_detail("IT-S2", submission_id=second["submission_id"], db_path=db_path)
+    assert second_view["submission"]["result"]["outcome"] == service.PUBLISHED
+    # 同页再次查询（模拟刷新）结果不变
+    refreshed = service.get_detail("IT-S2", submission_id=first["submission_id"], db_path=db_path)
+    assert refreshed["submission"]["result"]["outcome"] == service.REJECTED
+    assert refreshed["submission"]["id"] == first["submission_id"]
+    # 页面另显查询时的当前已发布完整时间线（已被第二次提交推进到 R1 发布版）
+    assert first_view["current_revision"] == 1
+    assert len(first_view["timeline"]) == 2
+
+
+def test_detail_without_submission_shows_only_current_state(db_path):
+    service.submit("IT-S3", 1, MULTI, db_path)
+    detail = service.get_detail("IT-S3", db_path=db_path)
+    assert detail["submission"] is None
+    assert detail["current_revision"] is None
+    service.submit("IT-S3", 1, VALID, db_path)
+    detail = service.get_detail("IT-S3", db_path=db_path)
+    assert detail["submission"] is None
+    assert detail["current_revision"] == 1  # 仅反映查询时的当前发布状态
+
+
+def test_foreign_or_unknown_submission_id_not_attached(db_path):
+    service.submit("IT-S4", 1, VALID, db_path)
+    other = service.submit("IT-S4-OTHER", 1, MULTI, db_path)
+    # 别的行程的提交 ID 不会挂到本行程
+    detail = service.get_detail("IT-S4", submission_id=other["submission_id"], db_path=db_path)
+    assert detail["submission"] is None
+    # 不存在的提交 ID
+    detail = service.get_detail("IT-S4", submission_id=999_999, db_path=db_path)
+    assert detail["submission"] is None
+
+
 # ---- 下载只返回完整已发布版本 ------------------------------------------
 
 def test_download_only_returns_published(db_path):

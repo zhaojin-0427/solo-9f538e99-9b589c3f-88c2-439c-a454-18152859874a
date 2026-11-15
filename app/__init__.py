@@ -64,32 +64,24 @@ def create_app() -> Flask:
                 flash(prefix + "：" + "；".join(result["reasons"]), "error")
             else:
                 flash(result.get("message", "提交被拒绝"), "error")
-        # 结构性错误发生在行程落库之前；行程不存在时回首页，否则进详情页
+        # 结构性错误发生在行程落库之前；行程不存在时回首页，否则进该次提交的完成页。
+        # 完成页以 submissions.id 为永久身份，刷新或后续同号上传都不会串换裁决结果。
         if outcome == "structural" and service.get_detail(itinerary_no) is None:
             return redirect(url_for("index"))
         return redirect(url_for("itinerary_detail", itinerary_no=itinerary_no,
-                                outcome=outcome, rev=revision_no))
+                                submission=result.get("submission_id")))
 
     @app.get("/itinerary/<path:itinerary_no>")
     def itinerary_detail(itinerary_no: str):
-        detail = service.get_detail(itinerary_no)
+        # submission 存在时定位「该次提交」的固定裁决结果；缺省时只展示当前已发布时间线
+        submission_id = request.args.get("submission", type=int)
+        detail = service.get_detail(itinerary_no, submission_id=submission_id)
         if detail is None:
             abort(404, description=f"行程 {itinerary_no} 不存在")
-        # 最近一次提交的裁决结果（仅用于本次页面提示）
-        latest = None
-        outcome = request.args.get("outcome")
-        rev = request.args.get("rev", type=int)
-        if outcome and rev is not None:
-            detail = service.get_detail(itinerary_no, latest_rev=rev)
-            if detail is None:
-                abort(404, description=f"行程 {itinerary_no} 不存在")
-            latest = {"outcome": outcome, "revision_no": rev,
-                      "submission": detail.get("latest_submission")}
-        else:
-            detail = service.get_detail(itinerary_no)
-            if detail is None:
-                abort(404, description=f"行程 {itinerary_no} 不存在")
-        return render_template("detail.html", d=detail, latest=latest)
+        # 带了提交 ID 却查不到对应记录（不存在或属于其他行程）-> 明确 404，不静默降级
+        if submission_id is not None and detail.get("submission") is None:
+            abort(404, description="该提交记录不存在或不属于此行程")
+        return render_template("detail.html", d=detail)
 
     @app.get("/download/<path:itinerary_no>")
     def download(itinerary_no: str):

@@ -13,13 +13,22 @@
   </p>
 </div>
 
-{% if latest and latest.submission %}
-{% set res = latest.submission.result %}
+{% if d.submission %}
+{% set res = d.submission.result %}
 <div class="card">
-  <h2>最近提交（R{{ latest.revision_no }}）裁决结果 —
+  <h2>本次提交（R{{ d.submission.revision_no }}）裁决结果 —
     {% if res.ok %}<span class="tag published">通过</span>{% else %}<span class="tag rejected">未发布</span>{% endif %}
   </h2>
-  <p><strong>{{ res.message }}</strong></p>
+  <p class="muted">提交时间 (UTC)：{{ d.submission.submitted_at }}
+    ｜提交编号：#{{ d.submission.id }}（刷新本页结果不变，且不影响其他同号提交）</p>
+  <p><strong>{{ res.message or "提交被拒绝" }}</strong></p>
+
+  {% if res.outcome == 'structural' and res.reasons %}
+  <div class="reason">
+    <strong>结构性 / 夏令时错误：</strong>
+    <ul>{% for e in res.reasons %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
 
   {% if res.outcome == 'published' and res.timeline %}
   <p class="muted">恰好一种可行解释，已发布为 R{{ res.revision_no }}。</p>

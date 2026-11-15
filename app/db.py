@@ -156,19 +156,23 @@ def list_itineraries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def log_submission(conn: sqlite3.Connection, itinerary_no: str, revision_no: int,
-                   content_sha256: str, result: dict) -> None:
-    conn.execute(
+                   content_sha256: str, result: dict) -> int:
+    """落库一次提交裁决（submissions 仅追加、永不更新/删除），返回提交行 ID。
+
+    该 ID 是每次上传的永久身份：完成页按它取回「该次」提交的状态与原因，
+    不随后续同修订号上传而改变。
+    """
+    cur = conn.execute(
         "INSERT INTO submissions (itinerary_no, revision_no, content_sha256, result, submitted_at)"
         " VALUES (?, ?, ?, ?, ?)",
         (itinerary_no, revision_no, content_sha256,
          json.dumps(result, ensure_ascii=False), utcnow_iso()),
     )
+    return cur.lastrowid
 
 
-def get_latest_submission(conn: sqlite3.Connection, itinerary_no: str,
-                          revision_no: int) -> sqlite3.Row | None:
+def get_submission_by_id(conn: sqlite3.Connection, submission_id: int) -> sqlite3.Row | None:
+    """按提交 ID 精确定位某一次上传的裁决记录（不随其他上传而变化）。"""
     return conn.execute(
-        "SELECT * FROM submissions WHERE itinerary_no = ? AND revision_no = ?"
-        " ORDER BY id DESC LIMIT 1",
-        (itinerary_no, revision_no),
+        "SELECT * FROM submissions WHERE id = ?", (submission_id,)
     ).fetchone()

@@ -19,10 +19,10 @@ import json
 from .csv_parser import parse_csv
 from .db import (
     get_itinerary,
-    get_latest_submission,
     get_published,
     get_published_segments,
     get_revision,
+    get_submission_by_id,
     immediate_transaction,
     list_itineraries,
     list_revisions,
@@ -119,7 +119,8 @@ def submit(itinerary_no: str, revision_no: int, raw: bytes, db_path: str | None 
     except Exception as exc:  # TimelineError 等
         result = {"outcome": STRUCTURAL, "ok": False, "reasons": [str(exc)]}
         with immediate_transaction(db_path) as conn:
-            log_submission(conn, itinerary_no, revision_no, content_hash, result)
+            submission_id = log_submission(conn, itinerary_no, revision_no, content_hash, result)
+        result["submission_id"] = submission_id
         return result
 
     ev: Evaluation = evaluate(parsed_rows)
@@ -153,7 +154,8 @@ def submit(itinerary_no: str, revision_no: int, raw: bytes, db_path: str | None 
                     "revision_no": revision_no,
                     "message": f"修订号 {revision_no} 已发布且内容不同，冲突拒绝，原发布不变",
                 }
-            log_submission(conn, itinerary_no, revision_no, content_hash, result)
+            result["submission_id"] = log_submission(
+                conn, itinerary_no, revision_no, content_hash, result)
             return result
 
         # 同号此前被拒：移除旧拒绝记录，按本次内容重新评估
@@ -175,7 +177,8 @@ def submit(itinerary_no: str, revision_no: int, raw: bytes, db_path: str | None 
                 (itinerary_id, revision_no, content_hash,
                  json.dumps(result, ensure_ascii=False), utcnow_iso()),
             )
-            log_submission(conn, itinerary_no, revision_no, content_hash, result)
+            result["submission_id"] = log_submission(
+                conn, itinerary_no, revision_no, content_hash, result)
             return result
 
         # 规则 3：时间线评估
@@ -203,7 +206,8 @@ def submit(itinerary_no: str, revision_no: int, raw: bytes, db_path: str | None 
                 (itinerary_id, revision_no, content_hash,
                  json.dumps(detail, ensure_ascii=False), utcnow_iso()),
             )
-        log_submission(conn, itinerary_no, revision_no, content_hash, result)
+        result["submission_id"] = log_submission(
+            conn, itinerary_no, revision_no, content_hash, result)
         return result
 
 
@@ -212,8 +216,15 @@ def get_overview(db_path: str | None = None) -> list[dict]:
         return [dict(r) for r in list_itineraries(conn)]
 
 
-def get_detail(itinerary_no: str, latest_rev: int | None = None,
+def get_detail(itinerary_no: str, submission_id: int | None = None,
                db_path: str | None = None) -> dict | None:
+    """行程详情。
+
+    - 始终返回查询时的「当前已发布完整时间线」与修订历史；
+    - 给定 submission_id 时，额外附上该次提交自身的裁决状态与原因。
+      submissions 仅追加，因此同一完成页（同一提交 ID）无论何时刷新、
+      无论其后是否有同修订号的其他上传，显示的都固定为该次提交的结果。
+    """
     with immediate_transaction(db_path) as conn:
         it = get_itinerary(conn, itinerary_no)
         if it is None:
@@ -227,16 +238,19 @@ def get_detail(itinerary_no: str, latest_rev: int | None = None,
             "published_at": published["published_at"] if published else None,
             "timeline": None,
             "revisions": revisions,
-            "latest_submission": None,
+            "submission": None,
         }
         if published is not None:
             out["timeline"] = [dict(r) for r in get_published_segments(conn, published["revision_id"])]
-        if latest_rev is not None:
-            sub = get_latest_submission(conn, itinerary_no, latest_rev)
-            if sub is not None:
-                out["latest_submission"] = {
+        if submission_id is not None:
+            sub = get_submission_by_id(conn, submission_id)
+            # 提交记录必须属于该行程，避免把别的行程的完成页挂到本行程下
+            if sub is not None and sub["itinerary_no"] == itinerary_no:
+                out["submission"] = {
+                    "id": sub["id"],
                     "revision_no": sub["revision_no"],
                     "submitted_at": sub["submitted_at"],
+                    "content_sha256": sub["content_sha256"],
                     "result": json.loads(sub["result"]),
                 }
         return out
